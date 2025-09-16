@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBDA Mapping Generator</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .log-container {
+            height: 400px;
+            overflow-y: auto;
+            background: #1a1a1a;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+        }
+        .log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .log-container::-webkit-scrollbar-track {
+            background: #2a2a2a;
+        }
+        .log-container::-webkit-scrollbar-thumb {
+            background: #4a4a4a;
+            border-radius: 4px;
+        }
+        .upload-area {
+            border: 2px dashed #d1d5db;
+            transition: all 0.3s ease;
+        }
+        .upload-area.drag-over {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+            padding: 2px 0;
+        }
+        .log-timestamp {
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        .log-info { color: #60a5fa; }
+        .log-success { color: #34d399; }
+        .log-warning { color: #fbbf24; }
+        .log-error { color: #f87171; }
+        .log-debug { color: #9ca3af; }
+
+        .processing-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            animation: pulse 1.5s infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        
+        .status-processing {
+            background: #ddd6fe;
+            color: #7c3aed;
+        }
+        
+        .status-completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .status-failed {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="app">
+        <div class="container mx-auto px-4 py-8 max-w-6xl">
+            <!-- Header -->
+            <div class="text-center mb-8">
+                <h1 class="text-4xl font-bold text-gray-800 mb-2">OBDA Mapping Generator</h1>
+                <p class="text-gray-600">Generate OBDA mappings from database schemas and ontologies using LLM</p>
+            </div>
+
+            <!-- Status Bar -->
+            <div v-if="currentJobId" class="bg-white rounded-lg shadow-lg p-4 mb-6">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <div class="processing-indicator" v-if="isProcessing"></div>
+                        <span class="font-medium">Current Job: {{ currentJobId }}</span>
+                        <div class="status-badge" :class="`status-${currentJobStatus}`">
+                            {{ currentJobStatus }}
+                        </div>
+                    </div>
+                    <div v-if="jobResult && jobResult.success" class="flex space-x-2">
+                        <span class="text-sm text-green-600">✅ {{ jobResult.mappings_count }} mappings</span>
+                        <a 
+                            :href="jobResult.download_url" 
+                            class="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded"
+                            download
+                        >
+                            Download
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Input Section -->
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <h2 class="text-2xl font-semibold text-gray-800 mb-6">Input Files</h2>
+                    
+                    <!-- Data File Upload -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Database Schema / CSV File
+                        </label>
+                        <div 
+                            class="upload-area rounded-lg p-6 text-center cursor-pointer"
+                            :class="{'drag-over': isDraggingData, 'opacity-50': isProcessing}"
+                            @click="!isProcessing && $refs.dataFile.click()"
+                            @drop.prevent="!isProcessing && handleDataDrop($event)"
+                            @dragover.prevent="!isProcessing && (isDraggingData = true)"
+                            @dragleave.prevent="isDraggingData = false"
+                        >
+                            <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            <p class="mt-2 text-sm text-gray-600">
+                                <span v-if="!dataFile">Click to upload or drag and drop</span>
+                                <span v-else class="text-green-600 font-medium">{{ dataFile.name }}</span>
+                            </p>
+                            <p class="text-xs text-gray-500">SQL, CSV files (max 100MB)</p>
+                            <input 
+                                type="file" 
+                                ref="dataFile"
+                                class="hidden"
+                                accept=".csv,.sql"
+                                @change="handleDataFileSelect"
+                                :disabled="isProcessing"
+                            >
+                        </div>
+                    </div>
+
+                    <!-- Ontology File Upload -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Ontology File
+                        </label>
+                        <div 
+                            class="upload-area rounded-lg p-6 text-center cursor-pointer"
+                            :class="{'drag-over': isDraggingOntology, 'opacity-50': isProcessing}"
+                            @click="!isProcessing && $refs.ontologyFile.click()"
+                            @drop.prevent="!isProcessing && handleOntologyDrop($event)"
+                            @dragover.prevent="!isProcessing && (isDraggingOntology = true)"
+                            @dragleave.prevent="isDraggingOntology = false"
+                        >
+                            <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                                <path d="M9 12h6m6 0h6m-6 6v6m-6-6v6m6 0v6m-6-6H9m12 0h6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            <p class="mt-2 text-sm text-gray-600">
+                                <span v-if="!ontologyFile">Click to upload or drag and drop</span>
+                                <span v-else class="text-green-600 font-medium">{{ ontologyFile.name }}</span>
+                            </p>
+                            <p class="text-xs text-gray-500">TTL, OWL, RDF, XML files</p>
+                            <input 
+                                type="file" 
+                                ref="ontologyFile"
+                                class="hidden"
+                                accept=".ttl,.owl,.rdf,.xml"
+                                @change="handleOntologyFileSelect"
+                                :disabled="isProcessing"
+                            >
+                        </div>
+                    </div>
+
+                    <!-- Output Filename -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Output Filename
+                        </label>
+                        <input 
+                            type="text" 
+                            v-model="output_filename"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="mappings.obda"
+                            :disabled="isProcessing"
+                        >
+                    </div>
+
+                    <!-- Generate Button -->
+                    <button 
+                        @click="generateMappings"
+                        :disabled="!canGenerate || isProcessing"
+                        class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center"
+                    >
+                        <svg v-if="isProcessing" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span v-if="isProcessing">Processing...</span>
+                        <span v-else>Generate OBDA Mappings</span>
+                    </button>
+
+                </div>
+
+                <!-- Logs Section -->
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-gray-800">Process Logs</h2>
+                        <div class="flex space-x-2">
+                            <button 
+                                @click="toggleAutoScroll"
+                                :class="autoScroll ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'"
+                                class="text-xs px-3 py-1 rounded transition-colors"
+                            >
+                                Auto-scroll {{ autoScroll ? 'ON' : 'OFF' }}
+                            </button>
+                            <button 
+                                @click="clearLogs"
+                                class="text-sm text-gray-500 hover:text-gray-700 px-3 py-1 border border-gray-300 rounded"
+                            >
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="log-container rounded-lg p-4 border" ref="logContainer">
+                        <div v-if="logs.length === 0" class="text-gray-500 text-center py-8">
+                            <div class="mb-2">📝 Logs will appear here during processing...</div>
+                            <div class="text-xs">Real-time streaming from backend</div>
+                        </div>
+                        <div v-for="(log, index) in logs" :key="index" class="log-entry">
+                            <span class="log-timestamp">[{{ log.timestamp }}]</span>
+                            <span :class="`log-${log.level}`"> {{ log.message }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Connection Status -->
+                    <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
+                        <div class="flex items-center">
+                            <div 
+                                class="w-2 h-2 rounded-full mr-2"
+                                :class="isConnected ? 'bg-green-500' : 'bg-red-500'"
+                            ></div>
+                            <span>
+                                {{ isConnected ? 'Connected' : 'Disconnected' }} 
+                                {{ currentJobId ? `(Job: ${currentJobId.slice(0, 8)}...)` : '' }}
+                            </span>
+                        </div>
+                        <div>
+                            Logs: {{ logs.length }} | 
+                            Auto-scroll: {{ autoScroll ? 'ON' : 'OFF' }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div v-if="jobResult" class="mt-8">
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <h2 class="text-2xl font-semibold text-gray-800 mb-4">Results</h2>
+                    
+                    <div v-if="jobResult.success" class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <div class="flex items-start">
+                            <svg class="w-5 h-5 text-green-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="flex-1">
+                                <h3 class="text-lg font-medium text-green-800">Generation Successful!</h3>
+                                <div class="mt-2 text-sm text-green-700">
+                                    <p>{{ jobResult.message }}</p>
+                                    <p>Mappings generated: <strong>{{ jobResult.mappings_count }}</strong></p>
+                                    <p>Tables processed: <strong>{{ jobResult.tables_processed }}</strong></p>
+                                </div>
+                                <div class="mt-4 flex space-x-3">
+                                    <a 
+                                        :href="jobResult.download_url" 
+                                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                                        download
+                                    >
+                                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                        </svg>
+                                        Download OBDA File
+                                    </a>
+                                    <button 
+                                        @click="resetForm"
+                                        class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                    >
+                                        Start New Generation
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-else class="bg-red-50 border border-red-200 rounded-lg p-4">
+                        <div class="flex items-start">
+                            <svg class="w-5 h-5 text-red-400 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="flex-1">
+                                <h3 class="text-lg font-medium text-red-800">Generation Failed</h3>
+                                <div class="mt-2 text-sm text-red-700">
+                                    <p>{{ jobResult.error }}</p>
+                                </div>
+                                <div class="mt-4">
+                                    <button 
+                                        @click="resetForm"
+                                        class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                    >
+                                        Try Again
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    // File management
+                    dataFile: null,
+                    ontologyFile: null,
+                    output_filename: 'mappings.obda',
+                                        
+                    // UI state
+                    isDraggingData: false,
+                    isDraggingOntology: false,
+                    autoScroll: true,
+                    
+                    // Job management
+                    currentJobId: null,
+                    currentJobStatus: 'idle',
+                    isProcessing: false,
+                    jobResult: null,
+                    
+                    // Logs and streaming
+                    logs: [],
+                    isConnected: false,
+                    eventSource: null,
+                    currentTime: new Date().toLocaleTimeString(),
+                    
+                    // API configuration
+                    apiBaseUrl: 'http://localhost:5000/api'
+                }
+            },
+            computed: {
+                canGenerate() {
+                    return this.dataFile && this.ontologyFile && this.output_filename.trim() && !this.isProcessing;
+                }
+            },
+            methods: {
+                // File handling
+                handleDataFileSelect(event) {
+                    const file = event.target.files[0];
+                    if (file) {
+                        this.dataFile = file;
+                        this.addLocalLog('info', `Data file selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+                    }
+                },
+                
+                handleOntologyFileSelect(event) {
+                    const file = event.target.files[0];
+                    if (file) {
+                        this.ontologyFile = file;
+                        this.addLocalLog('info', `Ontology file selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+                    }
+                },
+                
+                handleDataDrop(event) {
+                    this.isDraggingData = false;
+                    const files = event.dataTransfer.files;
+                    if (files.length > 0) {
+                        this.dataFile = files[0];
+                        this.addLocalLog('info', `Data file dropped: ${files[0].name}`);
+                    }
+                },
+                
+                handleOntologyDrop(event) {
+                    this.isDraggingOntology = false;
+                    const files = event.dataTransfer.files;
+                    if (files.length > 0) {
+                        this.ontologyFile = files[0];
+                        this.addLocalLog('info', `Ontology file dropped: ${files[0].name}`);
+                    }
+                },
+
+                // Logging
+                addLocalLog(level, message) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    this.logs.push({ level, message, timestamp });
+                    this.scrollLogsToBottom();
+                },
+
+                addStreamLog(logEntry) {
+                    if (logEntry.message === '...') return;
+                    
+                    this.logs.push(logEntry);
+                    this.scrollLogsToBottom();
+                },
+
+                scrollLogsToBottom() {
+                    if (this.autoScroll) {
+                        this.$nextTick(() => {
+                            const container = this.$refs.logContainer;
+                            if (container) {
+                                container.scrollTop = container.scrollHeight;
+                            }
+                        });
+                    }
+                },
+
+                toggleAutoScroll() {
+                    this.autoScroll = !this.autoScroll;
+                    if (this.autoScroll) {
+                        this.scrollLogsToBottom();
+                    }
+                },
+
+                clearLogs() {
+                    this.logs = [];
+                },
+
+                // Log streaming
+                startLogStreaming(jobId) {
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                    }
+
+                    this.addLocalLog('info', `🔌 Connecting to log stream for job ${jobId}...`);
+
+                    const eventSourceUrl = `${this.apiBaseUrl}/logs/${jobId}`;
+                    this.eventSource = new EventSource(eventSourceUrl);
+
+                    this.eventSource.onopen = () => {
+                        this.isConnected = true;
+                        this.addLocalLog('success', '✅ Connected to log stream');
+                    };
+
+                    this.eventSource.onmessage = (event) => {
+                        try {
+                            const logEntry = JSON.parse(event.data);
+                            this.addStreamLog(logEntry);
+                        } catch (e) {
+                            console.error('Error parsing log entry:', e);
+                        }
+                    };
+
+                    this.eventSource.onerror = (event) => {
+                        this.isConnected = false;
+                        if (this.eventSource.readyState === EventSource.CLOSED) {
+                            this.addLocalLog('warning', '⚠️ Log stream disconnected');
+                        } else {
+                            this.addLocalLog('error', '❌ Log stream connection error');
+                        }
+                    };
+
+                    this.eventSource.onclose = () => {
+                        this.isConnected = false;
+                        this.addLocalLog('info', '📡 Log stream closed');
+                    };
+                },
+
+                stopLogStreaming() {
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                        this.eventSource = null;
+                        this.isConnected = false;
+                    }
+                },
+
+                // Job management
+                async generateMappings() {
+                    if (!this.canGenerate) return;
+
+                    this.isProcessing = true;
+                    this.currentJobStatus = 'processing';
+                    this.jobResult = null;
+                    this.clearLogs();
+                    
+                    this.addLocalLog('info', '🚀 Starting OBDA mapping generation...');
+
+                    try {
+                        const formData = new FormData();
+                        formData.append('data_file', this.dataFile);
+                        formData.append('ontology_file', this.ontologyFile);
+                        
+
+                        if (this.output_filename.trim()) {
+                            formData.append('output_filename', this.output_filename.trim());
+                        }
+
+                        this.addLocalLog('info', 'Uploading files to backend...');
+
+                        const response = await fetch(`${this.apiBaseUrl}/generate-mappings`, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const result = await response.json();
+
+                        if (result.success) {
+                            this.currentJobId = result.job_id;
+                            this.addLocalLog('success', `Job started successfully: ${result.job_id}`);
+                            this.addLocalLog('info', 'Starting log stream...');
+                            
+                            // Start log's streaming
+                            this.startLogStreaming(result.job_id);
+                            
+                            // Monitoring job's status
+                            this.monitorJobStatus(result.job_id);
+                            
+                        } else {
+                            this.addLocalLog('error', `Failed to start job: ${result.error}`);
+                            this.jobResult = result;
+                            this.currentJobStatus = 'failed';
+                            this.isProcessing = false;
+                        }
+
+                    } catch (error) {
+                        this.addLocalLog('error', `Network error: ${error.message}`);
+                        this.jobResult = {
+                            success: false,
+                            error: `Network error: ${error.message}`
+                        };
+                        this.currentJobStatus = 'failed';
+                        this.isProcessing = false;
+                    }
+                },
+
+                async monitorJobStatus(jobId) {
+                    const checkStatus = async () => {
+                        try {
+                            const response = await fetch(`${this.apiBaseUrl}/job-status/${jobId}`);
+                            const status = await response.json();
+                            
+                            this.currentJobStatus = status.status;
+                            
+                            if (status.status === 'completed') {
+                                this.addLocalLog('success', 'Job completed successfully!');
+                                this.jobResult = {
+                                    success: true,
+                                    message: 'Generation completed successfully',
+                                    mappings_count: status.mappings_count,
+                                    tables_processed: status.tables_processed,
+                                    download_url: `${this.apiBaseUrl}/download/${jobId}`
+                                };
+                                this.isProcessing = false;
+                                this.stopLogStreaming();
+                                return;
+                                
+                            } else if (status.status === 'failed') {
+                                this.addLocalLog('error', `Job failed: ${status.error || 'Unknown error'}`);
+                                this.jobResult = {
+                                    success: false,
+                                    error: status.error || 'Job failed with unknown error'
+                                };
+                                this.isProcessing = false;
+                                this.stopLogStreaming();
+                                return;
+                            }
+                            
+                            // If still processing check again after 2seconds
+                            if (status.status === 'processing') {
+                                setTimeout(checkStatus, 2000);
+                            }
+                            
+                        } catch (error) {
+                            this.addLocalLog('error', `Status check error: ${error.message}`);
+                            setTimeout(checkStatus, 5000); // Retry after 5 seconds in case of error
+                        }
+                    };
+                    
+                    checkStatus();
+                },
+
+                resetForm() {
+                    this.dataFile = null;
+                    this.ontologyFile = null;
+                    this.jobResult = null;
+                    this.currentJobId = null;
+                    this.currentJobStatus = 'idle';
+                    this.isProcessing = false;
+                    this.clearLogs();
+                    this.stopLogStreaming();
+                    
+                    // Reset file inputs
+                    if (this.$refs.dataFile) {
+                        this.$refs.dataFile.value = '';
+                    }
+                    if (this.$refs.ontologyFile) {
+                        this.$refs.ontologyFile.value = '';
+                    }
+                    
+                    this.addLocalLog('info', 'Form reset - ready for new generation');
+                },
+
+                // API health check
+                async checkApiHealth() {
+                    try {
+                        const response = await fetch(`${this.apiBaseUrl}/health`);
+                        const health = await response.json();
+                        this.addLocalLog('success', `API connection successful - ${health.status}`);
+                        return true;
+                    } catch (error) {
+                        this.addLocalLog('warning', `API not accessible - Please ensure the Flask backend is running on port 5000`);
+                        return false;
+                    }
+                },
+
+                updateCurrentTime() {
+                    this.currentTime = new Date().toLocaleTimeString();
+                }
+            },
+
+            mounted() {
+                this.addLocalLog('info', ' OBDA Mapping Generator initialized');
+                this.checkApiHealth();
+                
+                // Update current time every second
+                setInterval(this.updateCurrentTime, 1000);
+            },
+
+            beforeUnmount() {
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
