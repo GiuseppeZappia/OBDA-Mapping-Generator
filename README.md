@@ -112,6 +112,13 @@ The UI shows:
 
 ---
 
+### 🖼️ Screenshots of the App
+
+#### Frontend Interface
+![Frontend UI](images/app.jpg)
+
+---
+
 ## 🧠 Technical Notes
 
 - **Containerization**: The backend can be easily containerized with Docker for deployment on HPC clusters or servers.
